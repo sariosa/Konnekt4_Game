@@ -40,6 +40,11 @@ class EnvConnect4(gym.Env):
         self.pos_value_to_name = {0: "-", 1: "X", 2: "O"}
         self.col_id_to_name = {i: f"col-{i}" for i in range(self.num_cols)}
 
+        # Emoji rendering (console)
+        self.player1_emoji = "🔵"  # X / Player 1
+        self.player2_emoji = "🔴"  # O / Player 2 (human or AI)
+        self.empty_emoji = "⚫"
+
         self.board = None
         self.turn = None
         self.count_moves = None
@@ -165,13 +170,33 @@ class EnvConnect4(gym.Env):
     # ---------- Console helper ----------
 
     def print_current_board(self):
-        print(f"Board after {self.count_moves} moves:")
-        readable = [self.pos_value_to_name[v] for v in self.board]
+        """
+        Prints a Connect-4 style board with emojis:
+        empty = ⚫, player 1 (X) = 🔵, player 2 (O) = 🔴
+
+        Note: Internally, row 0 is the TOP (because legality checks top cell),
+        and pieces drop toward increasing row index. So for a natural display,
+        we print from top row -> bottom row (0 -> num_rows-1).
+        """
+        print(f"\nBoard after {self.count_moves} moves:")
+
+        # Column headers
+        print("  ".join(map(str, range(self.num_cols))))
+        print("-" * (self.num_cols * 3))
+
         for r in range(self.num_rows):
-            start = r * self.num_cols
-            end = start + self.num_cols
-            print(readable[start:end])
-        print(list(range(self.num_cols)))
+            row_cells = []
+            for c in range(self.num_cols):
+                v = self.board[self._idx(r, c)]
+                if v == 1:
+                    row_cells.append(self.player1_emoji)
+                elif v == 2:
+                    row_cells.append(self.player2_emoji)
+                else:
+                    row_cells.append(self.empty_emoji)
+            print(" ".join(row_cells))
+
+        print()
 
     def check(self):
         check_env(self)
