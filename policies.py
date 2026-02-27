@@ -1,7 +1,7 @@
 import numpy as np
 from typing import Dict, Tuple
 
-
+# RANDOM POLICY
 class PolicyRandom:
     def __init__(self):
         pass
@@ -10,7 +10,7 @@ class PolicyRandom:
         legal = env._get_legal_actions()
         return int(env.np_random.choice(legal))
 
-
+# Q-LEARNING POLICY
 class PolicyQLearning:
     def __init__(self, env, alpha=0.1, gamma=0.99, epsilon=1.0, seed: int = 7):
         self.alpha = alpha
@@ -35,11 +35,11 @@ class PolicyQLearning:
 
         legal = env._get_legal_actions()
 
-        # explore
+        # Explore
         if self.rng.random() < self.epsilon:
             return int(self.rng.choice(legal))
 
-        # exploit (mask illegal)
+        # Exploit (mask illegal actions)
         q = self.Q[s].copy()
         for a in range(self.n_actions):
             if a not in legal:
@@ -60,3 +60,61 @@ class PolicyQLearning:
             target = float(r) + self.gamma * float(np.max(q_next))
 
         self.Q[s][a] = self.Q[s][a] + self.alpha * (target - self.Q[s][a])
+
+# HEURISTIC POLICY
+class PolicyHeuristic:
+    def __init__(self, seed: int = 42):
+        self.rng = np.random.default_rng(seed)
+
+    def _get_action(self, env, observation):
+        legal = env._get_legal_actions()
+        player = observation["turn"]
+        opponent = 2 if player == 1 else 1
+        
+        # 1) Immediate Win
+        winning_moves = []
+        for col in legal:
+            row = env._get_drop_row(col)
+            idx = env._idx(row, col)
+
+            env.board[idx] = player
+            if env.is_winner(player):
+                winning_moves.append(col)
+            env.board[idx] = 0  # Undo move
+
+        if winning_moves:
+            return int(self.rng.choice(winning_moves))
+
+      
+        # 2) Immediate Block
+        blocking_moves = []
+        for col in legal:
+            row = env._get_drop_row(col)
+            idx = env._idx(row, col)
+
+            env.board[idx] = opponent
+            if env.is_winner(opponent):
+                blocking_moves.append(col)
+            env.board[idx] = 0  # Undo move
+
+        if blocking_moves:
+            return int(self.rng.choice(blocking_moves))
+
+        # 3) Center Preference
+        center = env.num_cols // 2  # column 3
+        best_score = -float("inf")
+        best_moves = []
+
+        for col in legal:
+            score = -abs(col - center)
+            if score > best_score:
+                best_score = score
+                best_moves = [col]
+            elif score == best_score:
+                best_moves.append(col)
+
+        if best_moves:
+            return int(self.rng.choice(best_moves))
+
+        # 4) Fallback (should rarely trigger)
+        return int(self.rng.choice(legal))
