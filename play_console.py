@@ -1,3 +1,4 @@
+# play_console.py
 # Console play for Connect 4:
 # - Human vs Human
 # - Human vs Random
@@ -7,11 +8,27 @@
 # Required files in same folder:
 #   connect4_env.py
 #   policies.py
-#   train_qlearning.py
+#   qlearning.py
 
 from connect4_env import EnvConnect4
 from policies import PolicyRandom, PolicyHeuristic
-from qlearning import PolicyQLearningV4, train
+from qlearning import train, evaluate, QLearningAgent
+
+
+def get_qlearning_action(agent: QLearningAgent, env):
+    """
+    Convert the environment board into the raw-board format expected
+    by the old tabular Q-learning agent, then choose an action.
+    """
+    import numpy as np
+
+    # Convert env.board (row-major, top row first) into the board shape
+    # expected by qlearning.py utilities
+    board = np.array(env.board, dtype=np.int8).reshape(env.num_rows, env.num_cols)
+
+    # In the old qlearning.py, the agent always acts as turn=1
+    legal = env._get_legal_actions()
+    return agent.choose_action(board, turn=1, legal=legal)
 
 
 def play(env, opponents_policy=None, show_q_values: bool = False):
@@ -23,7 +40,7 @@ def play(env, opponents_policy=None, show_q_values: bool = False):
 
         while not episode_over:
             env.print_current_board()
-            
+
             # Human turn (Player 1 - X)
             if env.turn == 1:
                 legal = env._get_legal_actions()
@@ -42,7 +59,6 @@ def play(env, opponents_policy=None, show_q_values: bool = False):
                 if episode_over:
                     break
 
-            
             # Opponent turn (Player 2 - O)
             if opponents_policy is None:
                 # Human vs Human
@@ -60,19 +76,25 @@ def play(env, opponents_policy=None, show_q_values: bool = False):
 
             else:
                 # Policy-controlled opponent
-                action = opponents_policy._get_action(env, observation)
+                if isinstance(opponents_policy, QLearningAgent):
+                    action = get_qlearning_action(opponents_policy, env)
+                else:
+                    action = opponents_policy._get_action(env, observation)
+
                 print(
                     f"Other player's ({env.pos_value_to_name[env.turn]}) move: "
                     f"{action} ({env.col_id_to_name[action]})"
                 )
 
-                # Shows Q-values for Q-learning
-                if show_q_values and hasattr(opponents_policy, "Q"):
-                    s = tuple(observation["board"]) + (int(observation["turn"]),)
-                    if s in opponents_policy.Q:
+                # Show Q-values for old tabular Q-learning agent
+                if show_q_values and isinstance(opponents_policy, QLearningAgent):
+                    import numpy as np
+                    board = np.array(env.board, dtype=np.int8).reshape(env.num_rows, env.num_cols)
+                    key = opponents_policy.state_key(board, 1)
+                    if key in opponents_policy.q:
                         legal_actions = env._get_legal_actions()
                         action_info = {
-                            env.col_id_to_name[a]: f"{float(opponents_policy.Q[s][a]):.4f}"
+                            env.col_id_to_name[a]: f"{float(opponents_policy.q[key][a]):.4f}"
                             for a in legal_actions
                         }
                         print("Q-values:", action_info)
@@ -80,8 +102,7 @@ def play(env, opponents_policy=None, show_q_values: bool = False):
             observation, reward, terminated, truncated, info = env.step(action)
             episode_over = terminated or truncated
 
-
-        # Game Ended
+        # Game ended
         env.print_current_board()
 
         if env.is_winner(mark=1):
@@ -103,7 +124,7 @@ def main_menu():
     print("1) Human vs Human")
     print("2) Human vs Random")
     print("3) Human vs Heuristic")
-    print("4) Human vs trained Q-learning")
+    print("4) Train Q-learning (200k) then Human vs Q-learning")
     print("5) Exit")
 
     choice = input("Choose option (1-5): ").strip()
@@ -124,10 +145,10 @@ if __name__ == "__main__":
             play(env=EnvConnect4(), opponents_policy=PolicyHeuristic())
 
         elif choice == "4":
-            env = EnvConnect4()
-            agent = PolicyQLearningV4(env)
-            agent.load("q_table.pkl")
-            agent.epsilon = 0.0  # no exploration during play
+            print("\nTraining Q-learning agent for 200000 episodes...")
+            agent = train(episodes=200000)
+            evaluate(q_file="q_table.pkl", games=1000, out_plot="evaluation.png")
+            agent.epsilon = 0.0
             play(env=EnvConnect4(), opponents_policy=agent, show_q_values=False)
 
         elif choice == "5":
