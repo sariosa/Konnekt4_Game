@@ -11,7 +11,7 @@
 
 from connect4_env import EnvConnect4
 from policies import PolicyRandom, PolicyHeuristic
-from qlearning import train
+from qlearning import PolicyQLearningV4, train
 
 
 def play(env, opponents_policy=None, show_q_values: bool = False):
@@ -103,7 +103,7 @@ def main_menu():
     print("1) Human vs Human")
     print("2) Human vs Random")
     print("3) Human vs Heuristic")
-    print("4) Train Q-learning then Human vs Q-learning")
+    print("4) Human vs trained Q-learning")
     print("5) Exit")
 
     choice = input("Choose option (1-5): ").strip()
@@ -125,7 +125,9 @@ if __name__ == "__main__":
 
         elif choice == "4":
             env = EnvConnect4()
-            agent = train(episodes=50000)
+            agent = PolicyQLearningV4(env)
+            agent.load("q_table.pkl")
+            agent.epsilon = 0.0  # no exploration during play
             play(env=EnvConnect4(), opponents_policy=agent, show_q_values=False)
 
         elif choice == "5":

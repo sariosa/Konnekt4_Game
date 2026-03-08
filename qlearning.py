@@ -1,400 +1,414 @@
-# Use with train_qlearning.py for training and evaluation via CLI:
-#   python train_qlearning.py --train
-#   python train_qlearning.py --train --episodes 200000
-#   python train_qlearning.py --eval
+# qlearning.py
+# Feature-based Q-Learning for Connect-4
 #
-# The train() function is also importable by play.py as before:
-#   from train_qlearning import train
-#   agent = train(episodes=50000)
+# Usage:
+#   python qlearning.py --train
+#   python qlearning.py --train --episodes 300000
+#   python qlearning.py --eval
+#
+# Importable:
+#   from qlearning import train
+#   agent = train(episodes=300000)
 
-import argparse                      # CLI argument handling
-import random                        # Random opponent mixing + seeding
-import pickle                        # Saving/loading Q-table
-from typing import Optional, List, Tuple  # Type hints for clarity
-from dataclasses import dataclass    # Parameter container
+import argparse
+import random
+import pickle
+from typing import List
+from dataclasses import dataclass
 
-import numpy as np                   # Efficient board/feature ops
-import matplotlib.pyplot as plt      # Learning curve visualization
+import numpy as np
+import matplotlib.pyplot as plt
 
-from connect4_env import EnvConnect4                     # Connect-4 environment
-from policies import PolicyQLearning, PolicyHeuristic, PolicyRandom  # Base policies
+from connect4_env import EnvConnect4
+from policies import PolicyQLearning, PolicyHeuristic, PolicyRandom
 
 
 # ----------------------------
 # Constants
 # ----------------------------
-ROWS = 6   # Standard Connect-4 board height
-COLS = 7   # Standard Connect-4 board width
+ROWS = 6
+COLS = 7
 
 
 # ----------------------------
-# Feature-based state key (FIX A)
-# Replaces raw board tuple — collapses trillions of states into
-# ~300k meaningful strategic states the agent can actually learn from.
+# Feature-based state utilities
 # ----------------------------
 def _canonical_board(board: list) -> tuple:
-    """Return left-right canonical form (smaller of board vs mirror)."""
-    arr    = np.array(board).reshape(ROWS, COLS)        # Convert to 2D grid
-    mirror = np.fliplr(arr).flatten().tolist()          # Mirror across vertical axis
-    return tuple(board) if board <= mirror else tuple(mirror)  # Choose canonical symmetric form
+    """
+    Return a left-right canonical board form.
+    This lets mirrored positions share one representation.
+    """
+    arr = np.array(board).reshape(ROWS, COLS)
+    mirror = np.fliplr(arr).flatten().tolist()
+    return tuple(board) if board <= mirror else tuple(mirror)
 
-def _canonical_action(board: list, action: int) -> int:
-    """Mirror action if board was mirrored."""
-    arr    = np.array(board).reshape(ROWS, COLS)        # Convert to 2D grid
-    mirror = np.fliplr(arr).flatten().tolist()          # Mirror board for comparison
-    if board <= mirror:                                 # If original is canonical
-        return action                                   # Action unchanged
-    return (COLS - 1) - action                           # Mirror the column index
 
 def _col_height(board: list, col: int) -> int:
-    """Number of pieces in column (board stored row-major, row 0 = top)."""
-    return sum(1 for r in range(ROWS) if board[r * COLS + col] != 0)  # Count non-empty cells in col
+    """Return the number of occupied cells in a column."""
+    return sum(1 for r in range(ROWS) if board[r * COLS + col] != 0)
+
 
 def _count_n_in_a_row(board: list, piece: int, n: int) -> int:
-    """Count windows of exactly n pieces + (4-n) empties."""
-    arr   = np.array(board).reshape(ROWS, COLS)         # 2D board
-    empty = 0                                           # Empty cell marker
-    count = 0                                           # Total matching windows
+    """
+    Count windows of exactly n pieces and (4-n) empty cells.
+    Used to detect 2-in-a-row and 3-in-a-row patterns.
+    """
+    arr = np.array(board).reshape(ROWS, COLS)
+    empty = 0
+    count = 0
 
     def chk(w):
-        return w.count(piece) == n and w.count(empty) == (4 - n)  # Pattern definition (n pieces + rest empty)
+        return w.count(piece) == n and w.count(empty) == (4 - n)
 
+    # Horizontal
     for c in range(COLS - 3):
         for r in range(ROWS):
-            if chk([arr[r, c + i] for i in range(4)]): count += 1  # Horizontal windows
+            if chk([arr[r, c + i] for i in range(4)]):
+                count += 1
 
+    # Vertical
     for c in range(COLS):
         for r in range(ROWS - 3):
-            if chk([arr[r + i, c] for i in range(4)]): count += 1  # Vertical windows
+            if chk([arr[r + i, c] for i in range(4)]):
+                count += 1
 
+    # Diagonal down-right
     for c in range(COLS - 3):
         for r in range(ROWS - 3):
-            if chk([arr[r + i, c + i] for i in range(4)]): count += 1  # Diagonal ↘ windows
+            if chk([arr[r + i, c + i] for i in range(4)]):
+                count += 1
 
+    # Diagonal up-right
     for c in range(COLS - 3):
         for r in range(3, ROWS):
-            if chk([arr[r - i, c + i] for i in range(4)]): count += 1  # Diagonal ↗ windows
+            if chk([arr[r - i, c + i] for i in range(4)]):
+                count += 1
 
-    return count                                           # Return number of matching windows
+    return count
+
 
 def _immediate_win_cols(env: EnvConnect4, piece: int) -> List[int]:
-    """Columns where piece wins immediately."""
-    wins = []                                              # Winning columns accumulator
-    for col in env._get_legal_actions():                    # Iterate all legal actions
-        row = env._get_drop_row(col)                        # Simulated landing row
+    """
+    Return legal columns that give an immediate win for the given piece.
+    """
+    wins = []
+    for col in env._get_legal_actions():
+        row = env._get_drop_row(col)
         if row == -1:
-            continue                                        # Skip full columns (safety)
-        idx = env._idx(row, col)                            # Convert (row,col) to index
-        env.board[idx] = piece                              # Temporarily place piece
+            continue
+        idx = env._idx(row, col)
+        env.board[idx] = piece
         if env.is_winner(piece):
-            wins.append(col)                                # Record immediate winning action
-        env.board[idx] = 0                                  # Undo simulation
-    return wins                                             # Return list of winning columns
+            wins.append(col)
+        env.board[idx] = 0
+    return wins
+
 
 def board_to_features(board: list, turn: int, env: EnvConnect4) -> tuple:
     """
-    30-feature strategic state key (see feature list in qlearning_v4.py).
-    Same board position with irrelevant cell differences → same key.
+    Convert a raw board into a compact strategic feature representation.
+
+    Features include:
+    - current turn
+    - coarse column heights
+    - own and opponent 2/3-in-a-row patterns
+    - immediate winning threats
+    - center control
+    - per-column win flags
+    - coarse game phase
     """
-    cb    = list(_canonical_board(board))                   # Canonicalize board (symmetry)
-    piece = turn                                            # Current player piece (1 or 2)
-    opp   = 2 if turn == 1 else 1                           # Opponent piece id
+    cb = list(_canonical_board(board))
+    piece = turn
+    opp = 2 if turn == 1 else 1
 
-    feats = [int(turn)]                                     # Feature 1: whose turn
+    feats = [int(turn)]
 
-    # Column heights bucketed (0-3)
+    # Column heights (bucketed)
     for c in range(COLS):
-        feats.append(min(_col_height(cb, c) // 2, 3))       # Coarse height buckets to reduce state variance
+        feats.append(min(_col_height(cb, c) // 2, 3))
 
-    # Agent 2/3-in-a-row (capped)
-    feats.append(min(_count_n_in_a_row(cb, piece, 2), 8))   # Count potential 2-in-a-row windows
-    feats.append(min(_count_n_in_a_row(cb, piece, 3), 4))   # Count potential 3-in-a-row windows
+    # Own patterns
+    feats.append(min(_count_n_in_a_row(cb, piece, 2), 8))
+    feats.append(min(_count_n_in_a_row(cb, piece, 3), 4))
 
-    # Agent immediate win threats (capped at 3)
-    # Temporarily swap env board for counting
-    orig = env.board[:]                                     # Backup env board
-    env.board = cb[:]                                       # Use canonical board for threat checks
-    agent_threats = _immediate_win_cols(env, piece)         # Agent immediate winning moves
-    opp_threats   = _immediate_win_cols(env, opp)           # Opponent immediate winning moves
-    env.board = orig                                        # Restore env board
+    # Immediate winning moves
+    orig_board = env.board.copy() if env.board is not None else [0] * (ROWS * COLS)
+    try:
+        env.board = cb.copy()
+        agent_threats = _immediate_win_cols(env, piece)
+        opp_threats = _immediate_win_cols(env, opp)
+    finally:
+        env.board = orig_board
 
-    feats.append(min(len(agent_threats), 3))                # Feature: number of agent immediate wins (capped)
+    feats.append(min(len(agent_threats), 3))
 
-    # Opp 2/3-in-a-row (capped)
-    feats.append(min(_count_n_in_a_row(cb, opp, 2), 8))      # Opponent 2-in-a-row windows
-    feats.append(min(_count_n_in_a_row(cb, opp, 3), 4))      # Opponent 3-in-a-row windows
-    feats.append(min(len(opp_threats),   3))                 # Opponent immediate win count (capped)
+    # Opponent patterns
+    feats.append(min(_count_n_in_a_row(cb, opp, 2), 8))
+    feats.append(min(_count_n_in_a_row(cb, opp, 3), 4))
+    feats.append(min(len(opp_threats), 3))
 
-    # Center column occupancy (col 3)
-    center = [cb[r * COLS + 3] for r in range(ROWS) if cb[r * COLS + 3] != 0]  # Extract filled center cells
+    # Center control
+    center = [cb[r * COLS + 3] for r in range(ROWS) if cb[r * COLS + 3] != 0]
     if not center:
-        feats.append(0)                                     # Center empty
+        feats.append(0)
     elif all(p == piece for p in center):
-        feats.append(1)                                     # Center controlled by agent
+        feats.append(1)
     elif all(p == opp for p in center):
-        feats.append(2)                                     # Center controlled by opponent
+        feats.append(2)
     else:
-        feats.append(3)                                     # Mixed occupancy
+        feats.append(3)
 
-    # Per-column win flags
-    legal_set = set(env._get_legal_actions() if env.board == board else
-                    [c for c in range(COLS) if cb[c] == 0])   # Approx legal cols when using canonical board
+    # Per-column immediate win flags
     for c in range(COLS):
-        feats.append(1 if c in agent_threats else 0)         # Binary flags: agent immediate win in col c
+        feats.append(1 if c in agent_threats else 0)
     for c in range(COLS):
-        feats.append(1 if c in opp_threats else 0)           # Binary flags: opp immediate win in col c
+        feats.append(1 if c in opp_threats else 0)
 
     # Game phase
-    total = sum(1 for x in cb if x != 0)                     # Total stones placed so far
-    feats.append(min(total // 4, 10))                        # Coarse phase indicator (early→late)
+    total = sum(1 for x in cb if x != 0)
+    feats.append(min(total // 4, 10))
 
-    return tuple(feats)                                      # Final feature key (hashable)
+    return tuple(feats)
 
 
 # ----------------------------
-# Improved PolicyQLearning wrapper
-# Overrides _state_key to use feature-based representation.
-# Everything else (update, _get_action) stays from policies.py.
+# Q-Learning policy wrapper
 # ----------------------------
 class PolicyQLearningV4(PolicyQLearning):
     """
-    Drop-in replacement for PolicyQLearning with feature-based state key.
-    Attach env reference so feature extractor can use env helpers.
+    Q-learning policy using the feature-based state representation
+    instead of the full raw board.
     """
-    def __init__(self, env: EnvConnect4, alpha=0.1, gamma=0.99,
-                 epsilon=1.0, seed: int = 42):
-        super().__init__(env, alpha=alpha, gamma=gamma,
-                         epsilon=epsilon, seed=seed)        # Initialize base Q-learning policy
-        self._env_ref = env                                  # Keep env reference for feature extraction
+    def __init__(self, env: EnvConnect4, alpha=0.1, gamma=0.99, epsilon=1.0, seed: int = 42):
+        super().__init__(env, alpha=alpha, gamma=gamma, epsilon=epsilon, seed=seed)
+        self._env_ref = env
 
     def _state_key(self, observation):
-        board = list(observation["board"])                   # Extract board from observation
-        turn  = int(observation["turn"])                     # Extract current turn
-        return board_to_features(board, turn, self._env_ref)  # Convert board to compact feature key
+        board = list(observation["board"])
+        turn = int(observation["turn"])
+        return board_to_features(board, turn, self._env_ref)
 
     def _get_action(self, env, observation):
-        s     = self._state_key(observation)                 # Compute state key (feature-based)
-        legal = env._get_legal_actions()                      # Current legal moves
-        self._ensure(s)                                       # Ensure Q-table has an entry for state
+        # Keep the feature extractor tied to the current environment
+        self._env_ref = env
 
+        s = self._state_key(observation)
+        self._ensure(s)
+
+        legal = env._get_legal_actions()
+
+        # Exploration
         if self.rng.random() < self.epsilon:
-            return int(self.rng.choice(legal))               # Exploration: random legal action
+            return int(self.rng.choice(legal))
 
-        # Canonical action mapping for symmetry (FIX C)
-        board = list(observation["board"])                   # Raw board (for legality masking)
-        q     = self.Q[s].copy()                              # Copy Q-values for masking
-        for a in range(self.n_actions):
-            if a not in legal:
-                q[a] = -np.inf                               # Mask illegal actions
-        return int(np.argmax(q))                              # Exploitation: best legal action
+        # Exploitation with legal-action masking
+        q = self.Q[s].copy()
+        mask = np.full(self.n_actions, -np.inf, dtype=np.float32)
+        mask[legal] = q[legal]
+        return int(np.argmax(mask))
 
     def save(self, filename: str = "q_table.pkl"):
         with open(filename, "wb") as f:
-            pickle.dump(dict(self.Q), f)                     # Persist Q-table to disk
-        print(f"Saved Q-table → {filename}  (states={len(self.Q)})")  # Log save summary
+            pickle.dump(dict(self.Q), f)
+        print(f"Saved Q-table → {filename}  (states={len(self.Q)})")
 
     def load(self, filename: str = "q_table.pkl"):
-        from collections import defaultdict
         with open(filename, "rb") as f:
-            data = pickle.load(f)                            # Load stored Q-table
-        self.Q = data                                        # Restore Q-table
-        print(f"Loaded Q-table ← {filename}  (states={len(self.Q)})")  # Log load summary
+            data = pickle.load(f)
+        self.Q = data
+        print(f"Loaded Q-table ← {filename}  (states={len(self.Q)})")
 
 
 # ----------------------------
-# Reward shaping helpers
+# Reward-shaping helper
 # ----------------------------
 def _has_safe_move(env: EnvConnect4, acting_piece: int, opp_piece: int) -> bool:
-    """True if acting_piece has at least one move that doesn't give opp immediate win."""
-    for col in env._get_legal_actions():                     # Check all legal moves
-        row = env._get_drop_row(col)                         # Landing row for this move
+    """
+    Return True if the acting player has at least one move
+    that does not leave an immediate winning reply.
+    """
+    for col in env._get_legal_actions():
+        row = env._get_drop_row(col)
         if row == -1:
-            continue                                         # Skip full columns
-        idx = env._idx(row, col)                             # Convert to board index
-        env.board[idx] = acting_piece                        # Simulate acting player's move
-        opp_wins = _immediate_win_cols(env, opp_piece)       # Check if opponent then has immediate win
-        env.board[idx] = 0                                   # Undo simulation
+            continue
+        idx = env._idx(row, col)
+        env.board[idx] = acting_piece
+        opp_wins = _immediate_win_cols(env, opp_piece)
+        env.board[idx] = 0
         if not opp_wins:
-            return True                                      # Found at least one safe action
-    return False                                             # No safe action exists
+            return True
+    return False
+
+
+# ----------------------------
+# Training configuration
+# ----------------------------
+@dataclass
+class TrainParams:
+    episodes: int = 200_000
+    alpha_start: float = 0.15
+    alpha_end: float = 0.01
+    gamma: float = 0.99
+    epsilon_start: float = 1.0
+    epsilon_decay: float = 0.999996
+    epsilon_min: float = 0.05
+    heuristic_prob: float = 0.60
+    seed: int = 42
+    print_every: int = 5_000
+    q_file: str = "q_table.pkl"
+    curve_file: str = "learning_curve.png"
 
 
 # ----------------------------
 # Training
 # ----------------------------
-@dataclass
-class TrainParams:
-    episodes:      int   = 200_000
-    alpha_start:   float = 0.15
-    alpha_end:     float = 0.01
-    gamma:         float = 0.99
-    epsilon_start: float = 1.0
-    epsilon_decay: float = 0.999996   
-    epsilon_min:   float = 0.05
-    heuristic_prob: float = 0.80      
-    seed:          int   = 42
-    print_every:   int   = 5_000
-    q_file:        str   = "q_table.pkl"
-    curve_file:    str   = "learning_curve.png"
-
-
 def train(
-    episodes:   int = 200_000,
-    seed:       int = 42,
+    episodes: int = 200_000,
+    seed: int = 42,
     print_every: int = 5_000,
-    q_file:     str = "q_table.pkl",
+    q_file: str = "q_table.pkl",
     curve_file: str = "learning_curve.png",
 ) -> PolicyQLearningV4:
     """
-    Train and return a PolicyQLearningV4 agent.
-    Importable by play.py:  agent = train(episodes=50000)
+    Train and return a feature-based Q-learning agent.
     """
     params = TrainParams(
-        episodes=episodes, seed=seed,
-        print_every=print_every, q_file=q_file, curve_file=curve_file
-    )                                                        # Bundle training configuration
+        episodes=episodes,
+        seed=seed,
+        print_every=print_every,
+        q_file=q_file,
+        curve_file=curve_file,
+    )
 
-    random.seed(seed)                                        # Seed Python RNG
-    np.random.seed(seed)                                     # Seed NumPy RNG
+    random.seed(seed)
+    np.random.seed(seed)
 
-    env        = EnvConnect4()                                # Create environment
-    heuristic  = PolicyHeuristic(seed=seed)                   # Heuristic opponent policy
-    rand_pol   = PolicyRandom()                               # Random opponent policy
+    env = EnvConnect4()
+    heuristic = PolicyHeuristic(seed=seed)
+    rand_pol = PolicyRandom()
 
     agent = PolicyQLearningV4(
         env,
-        alpha   = params.alpha_start,
-        gamma   = params.gamma,
-        epsilon = params.epsilon_start,
-        seed    = seed,
-    )                                                        # Initialize learning agent
+        alpha=params.alpha_start,
+        gamma=params.gamma,
+        epsilon=params.epsilon_start,
+        seed=seed,
+    )
 
-    wins = losses = draws = 0                                 # Global outcome counters
-    window = 1000                                             # Moving average window size
-    recent: List[int]   = []                                  # Store recent win indicators
-    curve:  List[float] = []                                  # Store moving win-rate curve
+    wins = losses = draws = 0
+    window = 1000
+    recent: List[int] = []
+    curve: List[float] = []
 
-    print(f"Training v4 | episodes={episodes} | ε_decay={params.epsilon_decay} "
-          f"| α {params.alpha_start}→{params.alpha_end} "
-          f"| heuristic_prob={params.heuristic_prob}")         # Log configuration header
+    print(
+        f"Training v4 | episodes={episodes} | ε_decay={params.epsilon_decay} "
+        f"| α {params.alpha_start}→{params.alpha_end} "
+        f"| heuristic_prob={params.heuristic_prob}"
+    )
 
-    for ep in range(1, episodes + 1):                         # Loop over episodes
+    for ep in range(1, episodes + 1):
+        # Linear alpha decay
+        frac = ep / episodes
+        agent.alpha = params.alpha_start + frac * (params.alpha_end - params.alpha_start)
 
-        # FIX F: linear alpha decay
-        frac        = ep / episodes                           # Progress fraction (0→1)
-        agent.alpha = params.alpha_start + frac * (params.alpha_end - params.alpha_start)  # Decay α
+        obs, info = env.reset()
+        episode_over = False
+        last_obs = None
+        last_action = None
+        info_next = info
 
-        # FIX B: alternate who goes first
-        obs, info = env.reset()                               # Reset environment for new game
-        if ep % 2 == 0:
-            # Agent goes first — make one agent move before the loop
-            pass   # turn starts at 1 already in env          # No-op since env already starts at player 1
-
-        episode_over = False                                   # Episode termination flag
-        last_obs     = None                                    # Track last agent state (for opponent win credit)
-        last_action  = None                                    # Track last agent action
-
-        while not episode_over:                                # Step through the game
-            current_turn = env.turn                            # Current player turn (1 or 2)
-            legal        = env._get_legal_actions()             # Legal columns available
+        while not episode_over:
+            current_turn = env.turn
+            legal = env._get_legal_actions()
 
             if not legal:
-                draws += 1                                     # No legal moves means draw
+                draws += 1
                 break
 
-            # ---- Agent's turn (player 1 always, or player 2 on alternating eps) ----
-            agent_turn = (current_turn == 1 and ep % 2 != 0) or \
-                         (current_turn == 2 and ep % 2 == 0)    # Decide whether agent controls this turn
+            # Alternate the side controlled by the agent
+            agent_turn = (current_turn == 1 and ep % 2 != 0) or (current_turn == 2 and ep % 2 == 0)
 
             if agent_turn:
-                s      = agent._state_key(obs)                 # Current feature-based state key
-                action = agent._get_action(env, obs)            # Choose action via ε-greedy policy
+                s = agent._state_key(obs)
+                action = agent._get_action(env, obs)
 
-                last_obs    = obs                               # Save last agent observation (credit assignment)
-                last_action = action                            # Save last agent action
+                last_obs = obs
+                last_action = action
 
-                # --- Reward shaping BEFORE step ---
-                piece      = current_turn                       # Acting player id (agent side)
-                opp_piece  = 2 if piece == 1 else 1              # Opponent id
-                must_block = _immediate_win_cols(env, opp_piece) # Opponent immediate wins to potentially block
+                piece = current_turn
+                opp_piece = 2 if piece == 1 else 1
+                must_block = _immediate_win_cols(env, opp_piece)
 
-                obs_next, reward, terminated, truncated, info_next = env.step(action)  # Apply action in env
-                episode_over = terminated or truncated           # Update termination flag
+                obs_next, reward, terminated, truncated, info_next = env.step(action)
+                episode_over = terminated or truncated
 
-                s_next     = agent._state_key(obs_next)          # Next state key for Q-learning update
-                legal_next = info_next["legal_columns"]          # Legal actions from next state
+                s_next = agent._state_key(obs_next)
+                legal_next = info_next["legal_columns"]
 
                 if terminated:
-                    winner = info_next["winner"]                 # Winner id from env
+                    winner = info_next["winner"]
                     if winner == piece:
-                        shaped_reward = +5.0                     # FIX H: strong win reward
+                        shaped_reward = +5.0
                         wins += 1
                     elif winner != 0:
-                        shaped_reward = -5.0                     # FIX H: strong loss reward (e.g., illegal)
+                        shaped_reward = -5.0
                         losses += 1
                     else:
-                        shaped_reward = 0.0                      # Draw reward
+                        shaped_reward = 0.0
                         draws += 1
                 else:
-                    # Shaping for non-terminal step
-                    block_bonus = +2.0 if (must_block and action in must_block) else 0.0  # Reward correct block
+                    # Reward correct blocking and punish leaving obvious threats
+                    block_bonus = +2.0 if (must_block and action in must_block) else 0.0
 
-                    # Threat penalty only if safe move existed (FIX G)
-                    opp_threats_after = _immediate_win_cols(env, opp_piece)               # Opp threats after move
+                    opp_threats_after = _immediate_win_cols(env, opp_piece)
                     if opp_threats_after:
-                        threat_penalty = -2.0 if _has_safe_move(env, piece, opp_piece) else 0.0  # Penalize only if avoidable
+                        threat_penalty = -3.0 if _has_safe_move(env, piece, opp_piece) else 0.0
                     else:
-                        threat_penalty = 0.0                                              # No immediate threat → no penalty
+                        threat_penalty = 0.0
 
-                    # Offensive nudge: own threats created
-                    own_threats  = _immediate_win_cols(env, piece)                         # Agent threats after move
-                    threat_bonus = 0.1 * min(len(own_threats), 3)                          # Small incentive for pressure
+                    own_threats = _immediate_win_cols(env, piece)
+                    threat_bonus = 0.2 * min(len(own_threats), 3)
 
-                    shaped_reward = -0.01 + block_bonus + threat_penalty + threat_bonus    # Step cost + shaping
+                    shaped_reward = -0.01 + block_bonus + threat_penalty + threat_bonus
 
-                agent.update(s, action, shaped_reward, s_next, legal_next, episode_over)   # Q-learning update
+                agent.update(s, action, shaped_reward, s_next, legal_next, episode_over)
 
-                # FIX E: epsilon decay per step
                 if agent.epsilon > params.epsilon_min:
-                    agent.epsilon = max(params.epsilon_min,
-                                        agent.epsilon * params.epsilon_decay)             # Decay exploration safely
+                    agent.epsilon = max(params.epsilon_min, agent.epsilon * params.epsilon_decay)
 
-                obs = obs_next                                                             # Advance observation
+                obs = obs_next
 
             else:
-                # ---- Opponent's turn ----
+                # Opponent turn: mixed random / heuristic training
                 if random.random() < params.heuristic_prob:
-                    action = heuristic._get_action(env, obs)                               # Use heuristic opponent
+                    action = heuristic._get_action(env, obs)
                 else:
-                    action = rand_pol._get_action(env, obs)                                # Use random opponent
+                    action = rand_pol._get_action(env, obs)
 
-                obs_next, reward, terminated, truncated, info_next = env.step(action)      # Apply opponent action
-                episode_over = terminated or truncated                                     # Update termination
+                obs_next, reward, terminated, truncated, info_next = env.step(action)
+                episode_over = terminated or truncated
 
+                # If the opponent wins, penalize the agent's last move
                 if terminated and info_next["winner"] == current_turn:
-                    # Opponent won — punish agent's last action (FIX H)
                     losses += 1
                     if last_obs is not None and last_action is not None:
-                        s_last      = agent._state_key(last_obs)                           # State before last agent move
-                        s_next_last = agent._state_key(obs_next)                           # Terminal next state
-                        agent.update(s_last, last_action, -5.0,
-                                     s_next_last, [], True)                                # Terminal loss update
-                elif terminated:
-                    if info_next["is_draw"]:
-                        draws += 1                                                         # Count draws explicitly
+                        s_last = agent._state_key(last_obs)
+                        s_next_last = agent._state_key(obs_next)
+                        agent.update(s_last, last_action, -5.0, s_next_last, [], True)
+                elif terminated and info_next["is_draw"]:
+                    draws += 1
 
-                obs = obs_next                                                             # Advance observation
+                obs = obs_next
 
         # Track moving win rate
-        recent.append(1 if info_next.get("winner", 0) in
-                      ([1] if ep % 2 != 0 else [2]) else 0)                                # Win indicator (agent side)
+        recent.append(1 if info_next.get("winner", 0) in ([1] if ep % 2 != 0 else [2]) else 0)
         if len(recent) > window:
-            recent.pop(0)                                                                  # Maintain fixed window
-        curve.append(sum(recent) / len(recent))                                            # Append moving win-rate
+            recent.pop(0)
+        curve.append(sum(recent) / len(recent))
 
         if ep % print_every == 0:
-            cum_win = 100.0 * wins / ep                                                    # Cumulative win %
-            mov_win = 100.0 * curve[-1]                                                    # Moving win % (windowed)
+            cum_win = 100.0 * wins / ep
+            mov_win = 100.0 * curve[-1]
             print(
                 f"Ep {ep:>7}/{episodes} | "
                 f"CumWin%={cum_win:5.2f} | "
@@ -402,119 +416,141 @@ def train(
                 f"W/L/D {wins}/{losses}/{draws} | "
                 f"ε={agent.epsilon:.4f}  α={agent.alpha:.4f} | "
                 f"states={len(agent.Q)}"
-            )                                                                              # Log progress snapshot
+            )
 
-    print("\nTraining complete.")                                                          # Training end marker
-    agent.save(q_file)                                                                     # Save final Q-table
+    print("\nTraining complete.")
+    agent.save(q_file)
 
-    # Learning curve plot
-    fig, ax = plt.subplots(figsize=(12, 5))                                                # Create plot figure/axes
-    ax.plot(curve, linewidth=0.6, alpha=0.4, color="steelblue", label="Win rate (raw)")    # Plot raw win-rate curve
+    # Learning curve
+    fig, ax = plt.subplots(figsize=(12, 5))
+    ax.plot(curve, linewidth=0.6, alpha=0.4, color="steelblue", label="Win rate (raw)")
     if len(curve) > 5000:
-        n        = 5000
-        smoothed = np.convolve(curve, np.ones(n) / n, mode="valid")                        # Compute moving smooth curve
-        ax.plot(range(n // 2, n // 2 + len(smoothed)), smoothed,
-                linewidth=2.5, color="coral", label=f"Smoothed (n={n})")                   # Plot smoothed curve
-    ax.set_xlabel("Episode")                                                               # X label
-    ax.set_ylabel(f"Win Rate (moving avg, window={window})")                               # Y label
-    ax.set_title("Training Learning Curve — Q-learning v4 (Feature-Based States)")         # Title
-    ax.legend()                                                                            # Legend
-    ax.set_ylim(0, 1)                                                                      # Clamp to [0,1]
-    plt.tight_layout()                                                                     # Improve spacing
-    plt.savefig(curve_file, dpi=150)                                                       # Save plot image
-    print(f"Saved learning curve → {curve_file}")                                           # Log saved file path
+        n = 5000
+        smoothed = np.convolve(curve, np.ones(n) / n, mode="valid")
+        ax.plot(
+            range(n // 2, n // 2 + len(smoothed)),
+            smoothed,
+            linewidth=2.5,
+            color="coral",
+            label=f"Smoothed (n={n})",
+        )
+    ax.set_xlabel("Episode")
+    ax.set_ylabel(f"Win Rate (moving avg, window={window})")
+    ax.set_title("Training Learning Curve — Q-learning v4 (Feature-Based States)")
+    ax.legend()
+    ax.set_ylim(0, 1)
+    plt.tight_layout()
+    plt.savefig(curve_file, dpi=150)
+    print(f"Saved learning curve → {curve_file}")
 
-    return agent                                                                           # Return trained agent
+    return agent
 
 
 # ----------------------------
 # Evaluation
 # ----------------------------
 def evaluate(q_file: str = "q_table.pkl", games: int = 1000, seed: int = 42):
-    env   = EnvConnect4()                                                                  # Create eval environment
-    agent = PolicyQLearningV4(env, seed=seed)                                              # Create agent wrapper
-    agent.load(q_file)                                                                     # Load learned Q-table
-    agent.epsilon = 0.0                                                                    # Greedy evaluation (no exploration)
+    """
+    Evaluate the trained agent greedily against random and heuristic opponents.
+    """
+    env = EnvConnect4()
+    agent = PolicyQLearningV4(env, seed=seed)
+    agent.load(q_file)
+    agent.epsilon = 0.0
 
-    heuristic = PolicyHeuristic(seed=seed)                                                 # Heuristic opponent
-    rand_pol  = PolicyRandom()                                                             # Random opponent
+    heuristic = PolicyHeuristic(seed=seed)
+    rand_pol = PolicyRandom()
 
-    results = {}                                                                           # Store results per opponent
+    results = {}
     for opp_name, opp_pol in [("random", rand_pol), ("heuristic", heuristic)]:
-        W = L = D = 0                                                                      # Outcome counters
+        W = L = D = 0
         for i in range(games):
-            obs, info = env.reset()                                                        # Reset game for evaluation
-            done = False                                                                   # Termination flag
-            agent_is_p1 = (i % 2 == 0)   # FIX B: alternate sides in eval too              # Alternate starting player
+            obs, info = env.reset()
+            done = False
+            agent_is_p1 = (i % 2 == 0)
 
             while not done:
-                is_agent = (env.turn == 1 and agent_is_p1) or \
-                           (env.turn == 2 and not agent_is_p1)                             # Decide whose turn is agent
+                is_agent = (env.turn == 1 and agent_is_p1) or (env.turn == 2 and not agent_is_p1)
 
                 if is_agent:
-                    action = agent._get_action(env, obs)                                   # Agent selects greedy move
+                    action = agent._get_action(env, obs)
                 else:
-                    action = opp_pol._get_action(env, obs)                                 # Opponent selects move
+                    action = opp_pol._get_action(env, obs)
 
-                obs, reward, terminated, truncated, info = env.step(action)                # Step environment
-                done = terminated or truncated                                             # Update termination
+                obs, reward, terminated, truncated, info = env.step(action)
+                done = terminated or truncated
 
-            agent_piece = 1 if agent_is_p1 else 2                                          # Map agent side to piece id
-            winner = info["winner"]                                                        # Winner from env
-            if winner == agent_piece:      W += 1                                          # Agent win
-            elif info["is_draw"]:          D += 1                                          # Draw
-            else:                          L += 1                                          # Agent loss
+            agent_piece = 1 if agent_is_p1 else 2
+            winner = info["winner"]
+            if winner == agent_piece:
+                W += 1
+            elif info["is_draw"]:
+                D += 1
+            else:
+                L += 1
 
-        results[opp_name] = {"W": W, "L": L, "D": D, "win_rate": W / games}                 # Store aggregated stats
+        results[opp_name] = {"W": W, "L": L, "D": D, "win_rate": W / games}
 
-    print("\nEVALUATION (ε=0 greedy)")                                                      # Evaluation header
+    print("\nEVALUATION (ε=0 greedy)")
     for opp, v in results.items():
-        print(f"  vs {opp:>10}: W/L/D = {v['W']:>4}/{v['L']:>4}/{v['D']:>4} "
-              f"| win_rate = {v['win_rate']:.3f}")                                         # Print per-opponent results
+        print(
+            f"  vs {opp:>10}: W/L/D = {v['W']:>4}/{v['L']:>4}/{v['D']:>4} "
+            f"| win_rate = {v['win_rate']:.3f}"
+        )
 
-    labels    = ["Q vs Random", "Q vs Heuristic"]                                           # Plot labels
-    win_rates = [results["random"]["win_rate"], results["heuristic"]["win_rate"]]          # Values to plot
-    fig, ax   = plt.subplots(figsize=(6, 5))                                               # Create bar plot figure
-    bars      = ax.bar(labels, win_rates, color=["steelblue", "coral"], width=0.5)         # Plot win rates
+    labels = ["Q vs Random", "Q vs Heuristic"]
+    win_rates = [results["random"]["win_rate"], results["heuristic"]["win_rate"]]
+    fig, ax = plt.subplots(figsize=(6, 5))
+    bars = ax.bar(labels, win_rates, color=["steelblue", "coral"], width=0.5)
     for bar, wr in zip(bars, win_rates):
-        ax.text(bar.get_x() + bar.get_width() / 2, wr + 0.012,
-                f"{wr:.1%}", ha="center", va="bottom", fontweight="bold", fontsize=13)    # Annotate bars
-    ax.set_ylabel("Win Rate")                                                               # Y label
-    ax.set_ylim(0, 1)                                                                       # Clamp to [0,1]
-    ax.set_title("Evaluation Win Rates — Q-learning v4")                                    # Plot title
-    plt.tight_layout()                                                                      # Improve spacing
-    plt.savefig("evaluation.png", dpi=150)                                                  # Save plot to file
-    print("Saved evaluation plot → evaluation.png")                                         # Log saved file name
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            wr + 0.012,
+            f"{wr:.1%}",
+            ha="center",
+            va="bottom",
+            fontweight="bold",
+            fontsize=13,
+        )
+    ax.set_ylabel("Win Rate")
+    ax.set_ylim(0, 1)
+    ax.set_title("Evaluation Win Rates — Q-learning v4")
+    plt.tight_layout()
+    plt.savefig("evaluation.png", dpi=150)
+    print("Saved evaluation plot → evaluation.png")
 
 
 # ----------------------------
 # CLI
 # ----------------------------
 def main():
-    parser = argparse.ArgumentParser(description="Q-learning v4 for Connect-4")             # CLI parser
-    parser.add_argument("--train",       action="store_true")                               # Enable training mode
-    parser.add_argument("--eval",        action="store_true")                               # Enable evaluation mode
-    parser.add_argument("--episodes",    type=int, default=200_000)                         # Training episodes
-    parser.add_argument("--games",       type=int, default=1000)                            # Evaluation games
-    parser.add_argument("--seed",        type=int, default=42)                              # Random seed
-    parser.add_argument("--print_every", type=int, default=5_000)                           # Logging frequency
-    parser.add_argument("--qfile",       type=str, default="q_table.pkl")                   # Q-table filename
-    parser.add_argument("--curve",       type=str, default="learning_curve.png")           # Learning curve filename
-    args = parser.parse_args()                                                              # Parse CLI args
+    parser = argparse.ArgumentParser(description="Q-learning v4 for Connect-4")
+    parser.add_argument("--train", action="store_true")
+    parser.add_argument("--eval", action="store_true")
+    parser.add_argument("--episodes", type=int, default=200_000)
+    parser.add_argument("--games", type=int, default=1000)
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--print_every", type=int, default=5_000)
+    parser.add_argument("--qfile", type=str, default="q_table.pkl")
+    parser.add_argument("--curve", type=str, default="learning_curve.png")
+    args = parser.parse_args()
 
     if not (args.train or args.eval):
-        print("Specify --train and/or --eval")                                              # Require at least one action
+        print("Specify --train and/or --eval")
         return
 
     if args.train:
         train(
-            episodes=args.episodes, seed=args.seed,
+            episodes=args.episodes,
+            seed=args.seed,
             print_every=args.print_every,
-            q_file=args.qfile, curve_file=args.curve,
-        )                                                                                   # Run training pipeline
+            q_file=args.qfile,
+            curve_file=args.curve,
+        )
+
     if args.eval:
-        evaluate(q_file=args.qfile, games=args.games, seed=args.seed)                       # Run evaluation pipeline
+        evaluate(q_file=args.qfile, games=args.games, seed=args.seed)
 
 
 if __name__ == "__main__":
-    main()                                                                                  # Entry point
+    main()
