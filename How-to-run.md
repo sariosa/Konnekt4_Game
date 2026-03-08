@@ -19,7 +19,9 @@ __game menu option 5 (Human vs Q-learning) is using the Q-learning table you tra
 
 # Main command-line arguments
 
-´´´
+this is how to run:
+
+```
 qlearning.py
 --train : run training
 --eval : run evaluation
@@ -29,21 +31,22 @@ qlearning.py
 --print_every : progress print interval during training
 --qfile : path to saved Q-table
 --curve : output file for learning curve image
-´´´
+```
 
-´´´
+```
 test_overfitting.py
 --qfile : path to saved Q-table
 --games : games per seed per opponent
 --seeds : number of random seeds
 --gap_threshold : threshold for generalization-gap warning
-´´´
+```
 
 ## Example full run:
-´python qlearning.py --train --episodes 300000´
-´python qlearning.py --eval --qfile q_table.pkl´
-´python test_overfitting.py --qfile q_table.pkl --games 300 --seeds 5´
+
+     python qlearning.py --train --episodes 300000
+     python qlearning.py --eval --qfile q_table.pkl
+     python test_overfitting.py --qfile q_table.pkl --games 300 --seeds 5
 
 
 ## Clean restart:
-       ´rm q_table.pkl´
+       rm q_table.pkl
