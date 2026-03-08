@@ -247,7 +247,7 @@ def train(
 ) -> PolicyQLearningV4:
     """
     Train and return a PolicyQLearningV4 agent.
-    Importable by play.py:  agent = train(episodes=50000)
+    Importable by play.py:  agent = train(episodes=200000)
     """
     params = TrainParams(
         episodes=episodes, seed=seed,
@@ -422,7 +422,9 @@ def train(
     ax.set_ylim(0, 1)                                                                      # Clamp to [0,1]
     plt.tight_layout()                                                                     # Improve spacing
     plt.savefig(curve_file, dpi=150)                                                       # Save plot image
-    print(f"Saved learning curve → {curve_file}")                                           # Log saved file path
+    print(f"Saved learning curve → {curve_file}")  
+    
+    evaluate(q_file=q_file, games=1000, seed=seed, out_plot="evaluation.png")                                         # Log saved file path
 
     return agent                                                                           # Return trained agent
 
@@ -430,61 +432,78 @@ def train(
 # ----------------------------
 # Evaluation
 # ----------------------------
-def evaluate(q_file: str = "q_table.pkl", games: int = 1000, seed: int = 42):
-    env   = EnvConnect4()                                                                  # Create eval environment
-    agent = PolicyQLearningV4(env, seed=seed)                                              # Create agent wrapper
-    agent.load(q_file)                                                                     # Load learned Q-table
-    agent.epsilon = 0.0                                                                    # Greedy evaluation (no exploration)
+def evaluate(
+    q_file: str = "q_table.pkl",
+    games: int = 1000,
+    seed: int = 42,
+    out_plot: str = "evaluation.png",
+):
+    env = EnvConnect4()
+    agent = PolicyQLearningV4(env, seed=seed)
+    agent.load(q_file)
+    agent.epsilon = 0.0
 
-    heuristic = PolicyHeuristic(seed=seed)                                                 # Heuristic opponent
-    rand_pol  = PolicyRandom()                                                             # Random opponent
+    heuristic = PolicyHeuristic(seed=seed)
+    rand_pol = PolicyRandom()
 
-    results = {}                                                                           # Store results per opponent
+    results = {}
     for opp_name, opp_pol in [("random", rand_pol), ("heuristic", heuristic)]:
-        W = L = D = 0                                                                      # Outcome counters
+        W = L = D = 0
         for i in range(games):
-            obs, info = env.reset()                                                        # Reset game for evaluation
-            done = False                                                                   # Termination flag
-            agent_is_p1 = (i % 2 == 0)   # FIX B: alternate sides in eval too              # Alternate starting player
+            obs, info = env.reset()
+            done = False
+            agent_is_p1 = (i % 2 == 0)
 
             while not done:
-                is_agent = (env.turn == 1 and agent_is_p1) or \
-                           (env.turn == 2 and not agent_is_p1)                             # Decide whose turn is agent
+                is_agent = (env.turn == 1 and agent_is_p1) or (env.turn == 2 and not agent_is_p1)
 
                 if is_agent:
-                    action = agent._get_action(env, obs)                                   # Agent selects greedy move
+                    action = agent._get_action(env, obs)
                 else:
-                    action = opp_pol._get_action(env, obs)                                 # Opponent selects move
+                    action = opp_pol._get_action(env, obs)
 
-                obs, reward, terminated, truncated, info = env.step(action)                # Step environment
-                done = terminated or truncated                                             # Update termination
+                obs, reward, terminated, truncated, info = env.step(action)
+                done = terminated or truncated
 
-            agent_piece = 1 if agent_is_p1 else 2                                          # Map agent side to piece id
-            winner = info["winner"]                                                        # Winner from env
-            if winner == agent_piece:      W += 1                                          # Agent win
-            elif info["is_draw"]:          D += 1                                          # Draw
-            else:                          L += 1                                          # Agent loss
+            agent_piece = 1 if agent_is_p1 else 2
+            winner = info["winner"]
+            if winner == agent_piece:
+                W += 1
+            elif info["is_draw"]:
+                D += 1
+            else:
+                L += 1
 
-        results[opp_name] = {"W": W, "L": L, "D": D, "win_rate": W / games}                 # Store aggregated stats
+        results[opp_name] = {"W": W, "L": L, "D": D, "win_rate": W / games}
 
-    print("\nEVALUATION (ε=0 greedy)")                                                      # Evaluation header
+    print("\nEVALUATION (ε=0 greedy)")
     for opp, v in results.items():
-        print(f"  vs {opp:>10}: W/L/D = {v['W']:>4}/{v['L']:>4}/{v['D']:>4} "
-              f"| win_rate = {v['win_rate']:.3f}")                                         # Print per-opponent results
+        print(f"  vs {opp:>10}: W/L/D = {v['W']:>4}/{v['L']:>4}/{v['D']:>4} | win_rate = {v['win_rate']:.3f}")
 
-    labels    = ["Q vs Random", "Q vs Heuristic"]                                           # Plot labels
-    win_rates = [results["random"]["win_rate"], results["heuristic"]["win_rate"]]          # Values to plot
-    fig, ax   = plt.subplots(figsize=(6, 5))                                               # Create bar plot figure
-    bars      = ax.bar(labels, win_rates, color=["steelblue", "coral"], width=0.5)         # Plot win rates
+    labels = ["Q vs Random", "Q vs Heuristic"]
+    win_rates = [results["random"]["win_rate"], results["heuristic"]["win_rate"]]
+
+    fig, ax = plt.subplots(figsize=(6, 5))
+    bars = ax.bar(labels, win_rates, color=["steelblue", "coral"], width=0.5)
+
     for bar, wr in zip(bars, win_rates):
-        ax.text(bar.get_x() + bar.get_width() / 2, wr + 0.012,
-                f"{wr:.1%}", ha="center", va="bottom", fontweight="bold", fontsize=13)    # Annotate bars
-    ax.set_ylabel("Win Rate")                                                               # Y label
-    ax.set_ylim(0, 1)                                                                       # Clamp to [0,1]
-    ax.set_title("Evaluation Win Rates — Q-learning v4")                                    # Plot title
-    plt.tight_layout()                                                                      # Improve spacing
-    plt.savefig("evaluation.png", dpi=150)                                                  # Save plot to file
-    print("Saved evaluation plot → evaluation.png")                                         # Log saved file name
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            wr + 0.012,
+            f"{wr:.1%}",
+            ha="center",
+            va="bottom",
+            fontweight="bold",
+            fontsize=13,
+        )
+
+    ax.set_ylabel("Win Rate")
+    ax.set_ylim(0, 1)
+    ax.set_title("Evaluation Win Rates — Q-learning v4")
+    plt.tight_layout()
+    plt.savefig(out_plot, dpi=150)
+    plt.close()
+    print(f"Saved evaluation plot → {out_plot}")                                         # Log saved file name
 
 
 # ----------------------------
