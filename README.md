@@ -1,100 +1,139 @@
 # Konnekt4_Game
+
 Can reinforcement learning learn to play Connect 4 better than simple rule-based reasoning?
-Random Vs Q-Learning Vs Heuristic
 
-Connect 4 project with:
-- a Gymnasium environment (`connect4_env.py`)
-- tabular Q-learning training/evaluation (`qlearning.py`)
-- a console game menu (`play_console.py`)
+This project compares three approaches for playing Connect 4:
 
-## 1) Get the project files
+Random vs Q-Learning vs Heuristic
 
-### Option A (easiest, no Git needed)
-1. Open the GitHub repository page.
-2. Click **Code**.
-3. Click **Download ZIP**.
-4. Unzip it.
-5. Move the folder somewhere easy to find (for example Desktop).
+The project includes:
+
+- A Gymnasium environment (`connect4_env.py`)
+- Tabular Q-learning training and evaluation (`qlearning.py`)
+- A console game interface (`play_console.py`)
+
+---
+
+# 1) Get the project files
+
+### Option A (no Git required)
+
+1. Open the GitHub repository page  
+2. Click **Code**  
+3. Click **Download ZIP**  
+4. Unzip the folder  
+5. Move the folder somewhere easy to access (for example Desktop)
 
 ### Option B (with Git)
-```bash
+
+```
 git clone https://github.com/felipe-a7/Konnekt4_Game.git
 cd Konnekt4_Game
 ```
 
-## 2) Open Terminal in the project folder
+---
 
-If you downloaded ZIP, go into that folder first:
-```bash
+# 2) Open Terminal in the project folder
+
+If you downloaded the ZIP file:
+
+```
 cd /path/to/Konnekt4_Game
 ```
 
-## 3) Create and activate a virtual environment
+---
+
+# 3) Create and activate a virtual environment
 
 ### macOS / Linux
-```bash
+
+```
 python3 -m venv .venv
 source .venv/bin/activate
 ```
 
 ### Windows (PowerShell)
-```powershell
+
+```
 py -m venv .venv
 .\.venv\Scripts\Activate.ps1
 ```
 
-## 4) Install dependencies
+---
 
-```bash
+# 4) Install dependencies
+
+```
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
-## 5) Run the project
+---
 
-### Train a Q-learning agent
-```bash
+# 5) Run the project
+
+## Train a Q-learning agent
+
+```
 python qlearning.py --train --episodes 50000
 ```
 
 This creates:
+
 - `q_table.pkl`
 - `learning_curve.png`
 
-### Evaluate the trained agent
-```bash
+---
+
+## Evaluate the trained agent
+
+```
 python qlearning.py --eval --games 500 --qfile q_table.pkl
 ```
 
 This creates:
+
 - `evaluation.png`
 
-### Play against the trained AI
-```bash
-python qlearning.py --play --qfile q_table.pkl
-```
+---
 
-### Play console modes (human vs human/random/heuristic, or train then play)
-```bash
+## Play console modes
+
+```
 python play_console.py
 ```
 
-## 6) Common issues
+Available modes:
 
-### `ModuleNotFoundError`
-You are usually running the wrong Python interpreter.
+- Human vs Human  
+- Human vs Random  
+- Human vs Heuristic  
+- Train Q-learning then Human vs Q-learning  
 
-Use:
-```bash
+---
+
+# 6) Common issues
+
+### ModuleNotFoundError
+
+This usually means the wrong Python interpreter is being used.
+
+Check:
+
+```
 which python
 ```
 
-It should point to `.venv/...`. If not, reactivate:
-```bash
+It should point to `.venv/...`.
+
+If not, reactivate the virtual environment:
+
+```
 source .venv/bin/activate
 ```
 
-Then run scripts with:
-```bash
+Then run the scripts again:
+
+```
 python qlearning.py --train
 ```
