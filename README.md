@@ -11,6 +11,8 @@ The project includes:
 - A Gymnasium environment (`connect4_env.py`)
 - Tabular Q-learning training and evaluation (`qlearning.py`)
 - A console game interface (`play_console.py`)
+- Evaluation feature-based Q-learning (`test.py`)
+- The policy of the game (`policies.py`)
 
 ---
 
