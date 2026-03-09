@@ -1,20 +1,25 @@
-# Console play for Connect 4:
-# - Human vs Human
-# - Human vs Random
-# - Human vs Heuristic
-# - Human vs Q-learning
-#
-# Required files in same folder:
-#   connect4_env.py
-#   policies.py
-#   train_qlearning.py
-
 from connect4_env import EnvConnect4
 from policies import PolicyRandom, PolicyHeuristic
 from qlearning import train
 
 
 def play(env, opponents_policy=None, show_q_values: bool = False):
+    """
+    Runs a console-based Connect 4 game.
+
+    The function supports the following modes:
+    - Human vs Human
+    - Human vs policy-controlled opponent
+
+    Parameters
+    ----------
+    env : EnvConnect4
+        Connect 4 environment.
+    opponents_policy : object, optional
+        Opponent policy. If None, the game is played in Human vs Human mode.
+    show_q_values : bool, optional
+        If True, Q-values of the Q-learning policy are displayed for legal actions.
+    """
     keep_playing = True
 
     while keep_playing:
@@ -23,8 +28,8 @@ def play(env, opponents_policy=None, show_q_values: bool = False):
 
         while not episode_over:
             env.print_current_board()
-            
-            # Human turn (Player 1 - X)
+
+            # Player 1 is always controlled by the human
             if env.turn == 1:
                 legal = env._get_legal_actions()
                 action = int(
@@ -42,10 +47,8 @@ def play(env, opponents_policy=None, show_q_values: bool = False):
                 if episode_over:
                     break
 
-            
-            # Opponent turn (Player 2 - O)
+            # Player 2 can be either another human or a policy-controlled opponent
             if opponents_policy is None:
-                # Human vs Human
                 env.print_current_board()
                 legal = env._get_legal_actions()
                 action = int(
@@ -59,14 +62,13 @@ def play(env, opponents_policy=None, show_q_values: bool = False):
                     action = int(input("Try again: "))
 
             else:
-                # Policy-controlled opponent
                 action = opponents_policy._get_action(env, observation)
                 print(
                     f"Other player's ({env.pos_value_to_name[env.turn]}) move: "
                     f"{action} ({env.col_id_to_name[action]})"
                 )
 
-                # Shows Q-values for Q-learning
+                # Optionally display Q-values for the current state
                 if show_q_values and hasattr(opponents_policy, "Q"):
                     s = tuple(observation["board"]) + (int(observation["turn"]),)
                     if s in opponents_policy.Q:
@@ -80,8 +82,7 @@ def play(env, opponents_policy=None, show_q_values: bool = False):
             observation, reward, terminated, truncated, info = env.step(action)
             episode_over = terminated or truncated
 
-
-        # Game Ended
+        # Final board and result after the game ends
         env.print_current_board()
 
         if env.is_winner(mark=1):
@@ -99,6 +100,14 @@ def play(env, opponents_policy=None, show_q_values: bool = False):
 
 
 def main_menu():
+    """
+    Displays the console menu and returns the user's choice.
+
+    Returns
+    -------
+    str
+        Selected menu option.
+    """
     print("\n=== Connect 4 Console ===")
     print("1) Human vs Human")
     print("2) Human vs Random")
