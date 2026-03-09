@@ -7,22 +7,31 @@ from typing import Optional
 
 class EnvConnect4(gym.Env):
     """
-    Connect4 Gymnasium Env.
+    Gymnasium environment for the Connect 4 game.
 
-    Key design choice (IMPORTANT):
-    - Rewards are from the CURRENT/ACTING player's perspective.
-      * Win on your move: +1
-      * Lose (only happens via illegal move here): -1
-      * Draw: 0
-      * Otherwise: 0
+    The environment uses a 6x7 board stored as a flattened list.
+    Two players take turns dropping pieces into one of the columns.
+    A move is valid if the selected column is not full.
 
-    This makes Q-learning consistent when the policy uses observation["turn"]
-    and acts for whichever player's turn it is.
+    Reward design:
+    - +1 for a winning move by the acting player
+    - -1 for an illegal move by the acting player
+    - 0 for a draw
+    - 0 for all non-terminal intermediate moves
+
+    The reward is always given from the perspective of the current
+    acting player.
     """
 
     metadata = {"render_modes": ["human"]}
 
     def __init__(self):
+        """
+        Initializes the Connect 4 environment.
+
+        Sets board dimensions, observation space, action space,
+        display mappings, and internal game state variables.
+        """
         super().__init__()
 
         self.num_rows = 6
@@ -31,7 +40,7 @@ class EnvConnect4(gym.Env):
         self.observation_space = gym.spaces.Dict(
             {
                 "board": gym.spaces.MultiDiscrete([3] * (self.num_rows * self.num_cols)),
-                "turn": gym.spaces.Discrete(n=2, start=1),  # 1 or 2
+                "turn": gym.spaces.Discrete(n=2, start=1),
             }
         )
 
@@ -40,9 +49,9 @@ class EnvConnect4(gym.Env):
         self.pos_value_to_name = {0: "-", 1: "X", 2: "O"}
         self.col_id_to_name = {i: f"col-{i}" for i in range(self.num_cols)}
 
-        # Emoji rendering (console)
-        self.player1_emoji = "🔵"  # X / Player 1
-        self.player2_emoji = "🔴"  # O / Player 2 (human or AI)
+        # Symbols used for console rendering
+        self.player1_emoji = "🔵"
+        self.player2_emoji = "🔴"
         self.empty_emoji = "⚫"
 
         self.board = None
@@ -52,10 +61,34 @@ class EnvConnect4(gym.Env):
     # ---------- Core API helpers ----------
 
     def _get_obs(self):
-        # Return a COPY so policies can't mutate env via observation
+        """
+        Returns the current observation.
+
+        Returns
+        -------
+        dict
+            Dictionary containing the current board state and the
+            player whose turn it is.
+        """
+        # Return a copy to prevent external modification of the environment state
         return {"board": self.board.copy(), "turn": int(self.turn)}
 
     def _get_info(self, winner=0, is_draw=False):
+        """
+        Returns additional environment information.
+
+        Parameters
+        ----------
+        winner : int, optional
+            Winning player identifier. Default is 0 for no winner.
+        is_draw : bool, optional
+            Whether the current state is a draw. Default is False.
+
+        Returns
+        -------
+        dict
+            Additional information about the current game state.
+        """
         return {
             "board": self.board.copy(),
             "turn": int(self.turn),
@@ -66,6 +99,21 @@ class EnvConnect4(gym.Env):
         }
 
     def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
+        """
+        Resets the environment to its initial state.
+
+        Parameters
+        ----------
+        seed : int, optional
+            Random seed for reproducibility.
+        options : dict, optional
+            Additional reset options.
+
+        Returns
+        -------
+        tuple
+            Observation and info dictionary for the initial state.
+        """
         super().reset(seed=seed)
 
         self.board = [0] * (self.num_rows * self.num_cols)
@@ -77,39 +125,91 @@ class EnvConnect4(gym.Env):
     # ---------- Pure game logic ----------
 
     def _idx(self, row: int, col: int) -> int:
+        """
+        Converts a two-dimensional board position into a flat index.
+
+        Parameters
+        ----------
+        row : int
+            Row index.
+        col : int
+            Column index.
+
+        Returns
+        -------
+        int
+            Index in the flattened board representation.
+        """
         return row * self.num_cols + col
 
     def _get_drop_row(self, col: int) -> int:
-        # pieces fall to the bottom -> scan from bottom row up
+        """
+        Finds the row where a piece will land in a given column.
+
+        Parameters
+        ----------
+        col : int
+            Column index.
+
+        Returns
+        -------
+        int
+            Row index where the piece will be placed, or -1 if the
+            column is full.
+        """
+        # Pieces fall to the bottom, so the scan starts from the last row
         for row in range(self.num_rows - 1, -1, -1):
             if self.board[self._idx(row, col)] == 0:
                 return row
         return -1
 
     def _get_legal_actions(self):
-        # legal if top cell in the column is empty
+        """
+        Returns all legal actions from the current state.
+
+        A column is legal if its top cell is still empty.
+
+        Returns
+        -------
+        list[int]
+            List of playable column indices.
+        """
         return [col for col in range(self.num_cols) if self.board[self._idx(0, col)] == 0]
 
     def is_winner(self, mark: int) -> bool:
-        # Horizontal
+        """
+        Checks whether a player has formed a connect-four.
+
+        Parameters
+        ----------
+        mark : int
+            Player identifier, usually 1 or 2.
+
+        Returns
+        -------
+        bool
+            True if the given player has four connected pieces,
+            otherwise False.
+        """
+        # Horizontal check
         for row in range(self.num_rows):
             for col in range(self.num_cols - 3):
                 if all(self.board[self._idx(row, col + i)] == mark for i in range(4)):
                     return True
 
-        # Vertical
+        # Vertical check
         for row in range(self.num_rows - 3):
             for col in range(self.num_cols):
                 if all(self.board[self._idx(row + i, col)] == mark for i in range(4)):
                     return True
 
-        # Diagonal down-right
+        # Diagonal down-right check
         for row in range(self.num_rows - 3):
             for col in range(self.num_cols - 3):
                 if all(self.board[self._idx(row + i, col + i)] == mark for i in range(4)):
                     return True
 
-        # Diagonal up-right
+        # Diagonal up-right check
         for row in range(3, self.num_rows):
             for col in range(self.num_cols - 3):
                 if all(self.board[self._idx(row - i, col + i)] == mark for i in range(4)):
@@ -120,14 +220,27 @@ class EnvConnect4(gym.Env):
     # ---------- Gym step() ----------
 
     def step(self, action: int):
+        """
+        Executes one move in the environment.
+
+        Parameters
+        ----------
+        action : int
+            Column selected by the acting player.
+
+        Returns
+        -------
+        tuple
+            Observation, reward, terminated flag, truncated flag,
+            and info dictionary.
+        """
         legal = self._get_legal_actions()
 
-        # Illegal move => acting player immediately loses
+        # Illegal move: the acting player immediately loses
         if action not in legal:
             terminated = True
             truncated = False
-            reward = -1.0  # acting player loses
-            # winner is the OTHER player
+            reward = -1.0
             winner = 2 if self.turn == 1 else 1
             return self._get_obs(), reward, terminated, truncated, self._get_info(winner=winner, is_draw=False)
 
@@ -135,17 +248,17 @@ class EnvConnect4(gym.Env):
 
         row = self._get_drop_row(action)
         if row == -1:
-            # defensive fallback (should not happen if legal)
+            # Defensive fallback in case a full column is somehow selected
             terminated = True
             truncated = False
             reward = -1.0
             winner = 2 if self.turn == 1 else 1
             return self._get_obs(), reward, terminated, truncated, self._get_info(winner=winner, is_draw=False)
 
-        # Apply move for current player
+        # Apply the move for the current player
         self.board[self._idx(row, action)] = self.turn
 
-        # Win check (current player just played)
+        # Check whether the current player has won
         if self.is_winner(self.turn):
             terminated = True
             truncated = False
@@ -153,14 +266,14 @@ class EnvConnect4(gym.Env):
             winner = self.turn
             return self._get_obs(), reward, terminated, truncated, self._get_info(winner=winner, is_draw=False)
 
-        # Draw check
+        # If no legal actions remain, the game is a draw
         if len(self._get_legal_actions()) == 0:
             terminated = True
             truncated = False
             reward = 0.0
             return self._get_obs(), reward, terminated, truncated, self._get_info(winner=0, is_draw=True)
 
-        # Continue game
+        # Otherwise, switch to the other player and continue
         self.turn = 2 if self.turn == 1 else 1
         terminated = False
         truncated = False
@@ -171,16 +284,19 @@ class EnvConnect4(gym.Env):
 
     def print_current_board(self):
         """
-        Prints a Connect-4 style board with emojis:
-        empty = ⚫, player 1 (X) = 🔵, player 2 (O) = 🔴
+        Prints the current board state in the console.
 
-        Note: Internally, row 0 is the TOP (because legality checks top cell),
-        and pieces drop toward increasing row index. So for a natural display,
-        we print from top row -> bottom row (0 -> num_rows-1).
+        Display symbols:
+        - empty cell: ⚫
+        - player 1: 🔵
+        - player 2: 🔴
+
+        The board is printed from top row to bottom row for a natural
+        Connect 4 display.
         """
         print(f"\nBoard after {self.count_moves} moves:")
 
-        # Column headers
+        # Print column indices for user reference
         print("  ".join(map(str, range(self.num_cols))))
         print("-" * (self.num_cols * 3))
 
@@ -199,4 +315,7 @@ class EnvConnect4(gym.Env):
         print()
 
     def check(self):
+        """
+        Runs Gymnasium's environment checker on the environment.
+        """
         check_env(self)
