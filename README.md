@@ -13,8 +13,7 @@ The project includes:
 - A console game interface (`play_console.py`)
 - Evaluation feature-based Q-learning (`test.py`)
 - The policy of the game (`policies.py`)
-
-*  (`evaluation.png`) and (`learning_curve.png`) are reprodusable after each training
+- (`evaluation.png`) and (`learning_curve.png`) are reprodusable after each training
 
 ---
 
